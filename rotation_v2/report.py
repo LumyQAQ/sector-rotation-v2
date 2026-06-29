@@ -17,6 +17,47 @@ PHASE_COLORS = {
 }
 
 
+def select_sector_view(
+    sector_frame: pd.DataFrame,
+    *,
+    phases: list[str] | tuple[str, ...] | None = None,
+    max_sectors: int | None = None,
+    focus_sector: str | None = None,
+) -> pd.DataFrame:
+    """Return the sectors shown in the crowded RRG view.
+
+    The focused sector is kept even when it falls outside the phase filter or
+    Top N cutoff, because focus should never disappear while the user analyzes it.
+    """
+    if sector_frame.empty:
+        return sector_frame.copy()
+
+    base = sector_frame.copy()
+    view = base
+    if phases is not None:
+        phase_set = {phase for phase in phases if phase}
+        view = base[base["阶段"].isin(phase_set)].copy() if phase_set else base.iloc[0:0].copy()
+
+    if max_sectors is not None:
+        limit = max(0, int(max_sectors))
+        view = view.nlargest(min(limit, len(view)), "活跃分") if limit else view.iloc[0:0].copy()
+    else:
+        view = view.copy()
+
+    if focus_sector and focus_sector in set(base["行业名称"]):
+        focus_row = base[base["行业名称"] == focus_sector]
+        view = pd.concat([focus_row, view], ignore_index=True).drop_duplicates("行业名称", keep="first")
+
+    view["_聚焦"] = view["行业名称"].eq(focus_sector)
+    sort_columns = ["_聚焦"]
+    ascending = [False]
+    for column in ["活跃分", "5日涨幅"]:
+        if column in view.columns:
+            sort_columns.append(column)
+            ascending.append(False)
+    return view.sort_values(sort_columns, ascending=ascending).drop(columns="_聚焦").reset_index(drop=True)
+
+
 def _leader_lookup(model: RotationModel) -> dict[str, str]:
     if model.leaders_frame.empty:
         return {}
@@ -27,28 +68,81 @@ def _leader_lookup(model: RotationModel) -> dict[str, str]:
     return {sector: "<br>".join(parts) for sector, parts in lines.items()}
 
 
-def build_rrg_figure(model: RotationModel, label_limit: int = 32, trail_limit: int = 14) -> go.Figure:
-    df = model.sector_frame.copy()
+def _rrg_hover_template() -> str:
+    return (
+        "<b>%{customdata[0]}</b><br>"
+        "阶段: %{customdata[1]} / %{customdata[2]}<br>"
+        "相对强弱: %{x:.2f} | 动量: %{y:.2f}<br>"
+        "活跃分: %{customdata[3]:.1f}<br>"
+        "1日: %{customdata[4]:+.2f}% | 3日: %{customdata[5]:+.2f}% | 5日: %{customdata[6]:+.2f}%<br>"
+        "上涨占比: %{customdata[7]:.0%} | 涨停数: %{customdata[8]}<br><br>"
+        "%{customdata[9]}<extra></extra>"
+    )
+
+
+def _empty_rrg_figure(model: RotationModel) -> go.Figure:
+    fig = go.Figure()
+    fig.add_annotation(
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=0.5,
+        text="当前筛选没有可显示的板块",
+        showarrow=False,
+        font=dict(size=18, color="#6b7280"),
+    )
+    fig.update_layout(
+        title=f"{model.as_of} 板块轮动地图 | {model.market_state}",
+        template="plotly_white",
+        height=680,
+        margin=dict(l=34, r=24, t=70, b=42),
+        xaxis=dict(title="相对强弱: 越右越强", gridcolor="#edf2f7"),
+        yaxis=dict(title="动量: 越上越在加速", gridcolor="#edf2f7"),
+    )
+    return fig
+
+
+def build_rrg_figure(
+    model: RotationModel,
+    label_limit: int = 18,
+    trail_limit: int = 10,
+    *,
+    phases: list[str] | tuple[str, ...] | None = None,
+    max_sectors: int | None = None,
+    focus_sector: str | None = None,
+) -> go.Figure:
+    df = select_sector_view(model.sector_frame, phases=phases, max_sectors=max_sectors, focus_sector=focus_sector)
+    if df.empty:
+        return _empty_rrg_figure(model)
+
     leaders = _leader_lookup(model)
     top_labels = set(df.nlargest(min(label_limit, len(df)), "活跃分")["行业名称"])
+    if focus_sector:
+        top_labels.discard(focus_sector)
     df["标签"] = df["行业名称"].where(df["行业名称"].isin(top_labels), "")
     df["穿透"] = df["行业名称"].map(leaders).fillna("暂无个股穿透")
 
     fig = go.Figure()
-    top_trails = df.nlargest(min(trail_limit, len(df)), "活跃分")["行业名称"].tolist()
+    top_trails = set(df.nlargest(min(trail_limit, len(df)), "活跃分")["行业名称"])
+    if focus_sector and focus_sector in set(df["行业名称"]):
+        top_trails.add(focus_sector)
     trail_df = model.trail_frame[model.trail_frame["行业名称"].isin(top_trails)].copy()
     for sector, group in trail_df.groupby("行业名称"):
         group = group.sort_values("序号")
-        color = PHASE_COLORS.get(df.loc[df["行业名称"] == sector, "阶段"].iloc[0], "#666")
+        phase = df.loc[df["行业名称"] == sector, "阶段"].iloc[0]
+        color = PHASE_COLORS.get(phase, "#666")
+        is_focus = bool(focus_sector and sector == focus_sector)
         fig.add_trace(
             go.Scatter(
                 x=group["相对强弱"],
                 y=group["动量"],
-                mode="lines",
-                line=dict(color=color, width=1.6),
-                opacity=0.35,
+                mode="lines+markers" if is_focus else "lines",
+                name=f"{sector}轨迹" if is_focus else None,
+                line=dict(color="#111827" if is_focus else color, width=3.4 if is_focus else 1.35),
+                marker=dict(size=6, color="#111827") if is_focus else None,
+                opacity=0.95 if is_focus else 0.22,
                 hoverinfo="skip",
-                showlegend=False,
+                showlegend=is_focus,
             )
         )
 
@@ -63,27 +157,46 @@ def build_rrg_figure(model: RotationModel, label_limit: int = 32, trail_limit: i
                 textposition="top center",
                 textfont=dict(size=11, color="#1f2937"),
                 marker=dict(
-                    size=(group["活跃分"].clip(lower=8) / 100 * 38 + 10),
+                    size=(group["活跃分"].clip(lower=8) / 100 * 30 + 8),
                     color=group["5日涨幅"],
                     colorscale=[[0, "#009966"], [0.48, "#d8dee9"], [0.52, "#f0d5d5"], [1, "#d62728"]],
                     cmid=0,
                     line=dict(width=1, color="#ffffff"),
-                    opacity=0.86,
+                    opacity=0.82,
                     showscale=phase == df["阶段"].iloc[0],
                     colorbar=dict(title="5日涨幅%", len=0.72),
                 ),
                 customdata=group[
                     ["行业名称", "阶段", "方向", "活跃分", "1日涨幅", "3日涨幅", "5日涨幅", "上涨占比", "涨停数", "穿透"]
                 ],
-                hovertemplate=(
-                    "<b>%{customdata[0]}</b><br>"
-                    "阶段: %{customdata[1]} / %{customdata[2]}<br>"
-                    "相对强弱: %{x:.2f} | 动量: %{y:.2f}<br>"
-                    "活跃分: %{customdata[3]:.1f}<br>"
-                    "1日: %{customdata[4]:+.2f}% | 3日: %{customdata[5]:+.2f}% | 5日: %{customdata[6]:+.2f}%<br>"
-                    "上涨占比: %{customdata[7]:.0%} | 涨停数: %{customdata[8]}<br><br>"
-                    "%{customdata[9]}<extra></extra>"
+                hovertemplate=_rrg_hover_template(),
+            )
+        )
+
+    if focus_sector and focus_sector in set(df["行业名称"]):
+        focus = df[df["行业名称"] == focus_sector].copy()
+        fig.add_trace(
+            go.Scatter(
+                x=focus["相对强弱"],
+                y=focus["动量"],
+                mode="markers+text",
+                name=f"聚焦: {focus_sector}",
+                text=focus["行业名称"],
+                textposition="middle right",
+                textfont=dict(size=14, color="#111827"),
+                marker=dict(
+                    symbol="diamond",
+                    size=(focus["活跃分"].clip(lower=8) / 100 * 34 + 16),
+                    color=focus["5日涨幅"],
+                    colorscale=[[0, "#009966"], [0.48, "#d8dee9"], [0.52, "#f0d5d5"], [1, "#d62728"]],
+                    cmid=0,
+                    line=dict(width=3, color="#111827"),
+                    showscale=False,
                 ),
+                customdata=focus[
+                    ["行业名称", "阶段", "方向", "活跃分", "1日涨幅", "3日涨幅", "5日涨幅", "上涨占比", "涨停数", "穿透"]
+                ],
+                hovertemplate=_rrg_hover_template(),
             )
         )
 
@@ -101,6 +214,55 @@ def build_rrg_figure(model: RotationModel, label_limit: int = 32, trail_limit: i
         margin=dict(l=34, r=24, t=70, b=42),
         xaxis=dict(title="相对强弱: 越右越强", gridcolor="#edf2f7"),
         yaxis=dict(title="动量: 越上越在加速", gridcolor="#edf2f7"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hoverlabel=dict(bgcolor="#111827", font_color="white", align="left"),
+    )
+    return fig
+
+
+def build_sector_focus_figure(model: RotationModel, sector: str) -> go.Figure:
+    trail = model.trail_frame[model.trail_frame["行业名称"] == sector].sort_values("序号")
+    fig = go.Figure()
+    if trail.empty:
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=0.5,
+            text=f"{sector} 暂无轨迹数据",
+            showarrow=False,
+            font=dict(size=16, color="#6b7280"),
+        )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=trail["日期"],
+                y=trail["相对强弱"],
+                mode="lines+markers",
+                name="相对强弱",
+                line=dict(color="#d62728", width=2.4),
+                marker=dict(size=6),
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=trail["日期"],
+                y=trail["动量"],
+                mode="lines+markers",
+                name="动量",
+                line=dict(color="#4c78a8", width=2.4),
+                marker=dict(size=6),
+            )
+        )
+        fig.add_hline(y=0, line_color="#9ca3af", line_width=1)
+
+    fig.update_layout(
+        title=f"{sector} | 强弱与动量轨迹",
+        template="plotly_white",
+        height=360,
+        margin=dict(l=34, r=18, t=56, b=38),
+        xaxis=dict(title="日期", gridcolor="#edf2f7"),
+        yaxis=dict(title="指标值", gridcolor="#edf2f7"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hoverlabel=dict(bgcolor="#111827", font_color="white", align="left"),
     )
