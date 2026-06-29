@@ -4,7 +4,7 @@ import streamlit as st
 
 from rotation_v2.data_loader import available_dates, load_sqlite_data, resolve_db_path
 from rotation_v2.metrics import build_rotation_model
-from rotation_v2.report import build_rrg_figure
+from rotation_v2.report import PHASE_COLORS, build_rrg_figure, build_sector_focus_figure, select_sector_view
 
 
 st.set_page_config(page_title="板块轮动图 V2", layout="wide")
@@ -30,12 +30,66 @@ with st.sidebar:
 
 model = build_rotation_model(stock_daily, stock_industry, as_of=selected_date, tail_days=tail_days)
 
+with st.sidebar:
+    st.header("视图")
+    density_options = ["精选", "扩展", "全部"]
+    if hasattr(st, "segmented_control"):
+        density = st.segmented_control("气泡密度", density_options, default="精选")
+    else:
+        density = st.radio("气泡密度", density_options, index=0, horizontal=True)
+    max_sector_map = {"精选": 32, "扩展": 55, "全部": None}
+    selected_phases = st.multiselect("阶段", list(PHASE_COLORS.keys()), default=list(PHASE_COLORS.keys()))
+    label_limit = st.slider("标签数量", 0, 36, 14)
+    focus_options = ["不聚焦"] + model.sector_frame["行业名称"].tolist()
+    focus_choice = st.selectbox("聚焦板块", focus_options, index=0)
+    focus_sector = None if focus_choice == "不聚焦" else focus_choice
+
+visible_sectors = select_sector_view(
+    model.sector_frame,
+    phases=selected_phases,
+    max_sectors=max_sector_map[density],
+    focus_sector=focus_sector,
+)
+
 top_cols = st.columns(7)
 for col, (key, value) in zip(top_cols, model.summary.items()):
     col.metric(key, value)
 
 st.subheader(f"{model.as_of} | {model.market_state}")
-st.plotly_chart(build_rrg_figure(model), use_container_width=True)
+st.caption(f"显示范围: {len(visible_sectors)} / {len(model.sector_frame)} 个板块")
+st.plotly_chart(
+    build_rrg_figure(
+        model,
+        label_limit=label_limit,
+        phases=selected_phases,
+        max_sectors=max_sector_map[density],
+        focus_sector=focus_sector,
+    ),
+    width="stretch",
+)
+
+if focus_sector:
+    focus_row = model.sector_frame.set_index("行业名称").loc[focus_sector]
+    st.subheader(f"聚焦 | {focus_sector}")
+    focus_cols = st.columns(7)
+    focus_metrics = [
+        ("阶段", focus_row["阶段"]),
+        ("方向", focus_row["方向"]),
+        ("活跃分", f"{focus_row['活跃分']:.1f}"),
+        ("1日涨幅", f"{focus_row['1日涨幅']:+.2f}%"),
+        ("5日涨幅", f"{focus_row['5日涨幅']:+.2f}%"),
+        ("上涨占比", f"{focus_row['上涨占比']:.0%}"),
+        ("成交额", f"{focus_row['成交额'] / 100000000:.1f}亿"),
+    ]
+    for col, (label, value) in zip(focus_cols, focus_metrics):
+        col.metric(label, value)
+
+    focus_chart_col, focus_table_col = st.columns([1.35, 1])
+    with focus_chart_col:
+        st.plotly_chart(build_sector_focus_figure(model, focus_sector), width="stretch")
+    with focus_table_col:
+        focus_leaders = model.leaders_frame[model.leaders_frame["行业名称"] == focus_sector]
+        st.dataframe(focus_leaders, use_container_width=True, height=360)
 
 tab_main, tab_fix, tab_down, tab_leaders, tab_raw = st.tabs(["主线榜", "修复榜", "退潮榜", "个股穿透", "明细"])
 with tab_main:
