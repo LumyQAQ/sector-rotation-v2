@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from rotation_v2.data_loader import available_dates, load_sqlite_data, resolve_db_path
+from rotation_v2.freshness import LATEST_MANIFEST_URL, freshness_status, load_remote_latest_manifest
 from rotation_v2.metrics import build_rotation_model
 from rotation_v2.report import PHASE_COLORS, build_rrg_figure, build_sector_focus_figure, select_sector_view
 
@@ -22,6 +23,14 @@ def database_signature(db_path: str) -> tuple[str, int, int]:
     return str(resolved.resolve()), stat.st_mtime_ns, stat.st_size
 
 
+@st.cache_data(show_spinner=False, ttl=300)
+def cached_remote_latest_manifest(url: str):
+    try:
+        return load_remote_latest_manifest(url)
+    except Exception:
+        return {}
+
+
 st.title("板块轮动图 V2")
 st.caption("收盘后复盘: RRG 强弱动量、主线榜、修复榜、退潮榜、个股穿透。")
 
@@ -32,8 +41,18 @@ with st.sidebar:
     resolved_path, db_mtime_ns, db_size = database_signature(db_path)
     stock_daily, stock_industry, resolved_db = cached_load(resolved_path, db_mtime_ns, db_size)
     dates = available_dates(stock_daily)
+    remote_latest = cached_remote_latest_manifest(LATEST_MANIFEST_URL)
+    latest_loaded_date = dates[-1]
+    remote_latest_date = remote_latest.get("date")
+    st.caption(f"当前加载: {latest_loaded_date}")
+    if remote_latest_date:
+        st.caption(f"GitHub 最新: {remote_latest_date}")
     selected_date = st.selectbox("交易日", dates, index=len(dates) - 1)
     tail_days = st.slider("轨迹回看", 8, 35, 18)
+
+status, freshness_message = freshness_status(latest_loaded_date, remote_latest)
+if status == "stale" and freshness_message:
+    st.warning(freshness_message)
 
 model = build_rotation_model(stock_daily, stock_industry, as_of=selected_date, tail_days=tail_days)
 
