@@ -36,6 +36,12 @@ def resolve_db_path(db_path: str | Path | None = None) -> Path:
     raise FileNotFoundError(f"找不到 sample_data.db，已检查:\n{searched}")
 
 
+def database_signature(db_path: str | Path | None = None) -> tuple[str, int, int]:
+    path = resolve_db_path(db_path)
+    stat = path.stat()
+    return str(path.resolve()), stat.st_mtime_ns, stat.st_size
+
+
 def load_sqlite_data(db_path: str | Path | None = None) -> tuple[pd.DataFrame, pd.DataFrame, Path]:
     path = resolve_db_path(db_path)
     with sqlite3.connect(path) as conn:

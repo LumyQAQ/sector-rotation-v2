@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from rotation_v2.data_loader import available_dates, load_sqlite_data, resolve_db_path
+from rotation_v2.data_loader import available_dates, database_signature, load_sqlite_data, resolve_db_path
 from rotation_v2.metrics import build_rotation_model
 from rotation_v2.report import PHASE_COLORS, build_rrg_figure, build_sector_focus_figure, select_sector_view
 
@@ -11,8 +11,8 @@ st.set_page_config(page_title="板块轮动图 V2", layout="wide")
 
 
 @st.cache_data(show_spinner=False)
-def cached_load(db_path: str):
-    daily, industry, resolved = load_sqlite_data(db_path or None)
+def cached_load(db_path: str, db_mtime_ns: int, db_size: int):
+    daily, industry, resolved = load_sqlite_data(db_path)
     return daily, industry, str(resolved)
 
 
@@ -23,7 +23,8 @@ with st.sidebar:
     st.header("数据")
     default_path = str(resolve_db_path(None))
     db_path = st.text_input("SQLite 数据库", value=default_path)
-    stock_daily, stock_industry, resolved_db = cached_load(db_path)
+    resolved_path, db_mtime_ns, db_size = database_signature(db_path)
+    stock_daily, stock_industry, resolved_db = cached_load(resolved_path, db_mtime_ns, db_size)
     dates = available_dates(stock_daily)
     selected_date = st.selectbox("交易日", dates, index=len(dates) - 1)
     tail_days = st.slider("轨迹回看", 8, 35, 18)
