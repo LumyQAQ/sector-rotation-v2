@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import inspect
+from dataclasses import replace
+
 import streamlit as st
 
 from rotation_v2.data_loader import available_dates, load_sqlite_data, resolve_db_path
@@ -91,6 +94,61 @@ def display_columns(frame, columns):
     return frame.loc[:, available].rename(columns={"行业名称": name_column_label, "主线家族": family_label})
 
 
+def helper_accepts_family(helper) -> bool:
+    return "families" in inspect.signature(helper).parameters
+
+
+def filter_by_family(frame, families):
+    if families is None or "主线家族" not in frame.columns:
+        return frame
+    family_set = {family for family in families if family}
+    return frame[frame["主线家族"].isin(family_set)].copy() if family_set else frame.iloc[0:0].copy()
+
+
+def select_sector_view_safe(frame, *, phases, families, max_sectors, focus_sector):
+    if helper_accepts_family(select_sector_view):
+        return select_sector_view(
+            frame,
+            phases=phases,
+            families=families,
+            max_sectors=max_sectors,
+            focus_sector=focus_sector,
+        )
+    return select_sector_view(
+        filter_by_family(frame, families),
+        phases=phases,
+        max_sectors=max_sectors,
+        focus_sector=focus_sector,
+    )
+
+
+def build_rrg_figure_safe(model, *, label_limit, phases, families, max_sectors, focus_sector):
+    if helper_accepts_family(build_rrg_figure):
+        return build_rrg_figure(
+            model,
+            label_limit=label_limit,
+            phases=phases,
+            families=families,
+            max_sectors=max_sectors,
+            focus_sector=focus_sector,
+        )
+    filtered_model = model
+    if families is not None:
+        sector_frame = filter_by_family(model.sector_frame, families)
+        sector_names = set(sector_frame["行业名称"]) if "行业名称" in sector_frame.columns else set()
+        trail_frame = model.trail_frame
+        if "行业名称" in trail_frame.columns:
+            trail_frame = trail_frame[trail_frame["行业名称"].isin(sector_names)].copy()
+        filtered_model = replace(model, sector_frame=sector_frame, trail_frame=trail_frame)
+    return build_rrg_figure(
+        filtered_model,
+        label_limit=label_limit,
+        phases=phases,
+        max_sectors=max_sectors,
+        focus_sector=focus_sector,
+    )
+
+
 with st.sidebar:
     st.header("口径")
     if view_mode == "开盘啦概念轮动":
@@ -121,7 +179,7 @@ with st.sidebar:
     focus_choice = st.selectbox(focus_label, focus_options, index=0)
     focus_sector = None if focus_choice == "不聚焦" else focus_choice
 
-visible_sectors = select_sector_view(
+visible_sectors = select_sector_view_safe(
     model.sector_frame,
     phases=selected_phases,
     families=selected_families,
@@ -136,7 +194,7 @@ for col, (key, value) in zip(top_cols, model.summary.items()):
 st.subheader(f"{view_mode} | {model.as_of} | {model.market_state}")
 family_caption = f"全部{family_label}" if selected_families is None else selected_families[0]
 st.caption(f"显示范围: {len(visible_sectors)} / {len(model.sector_frame)} 个{object_label} | {family_label}: {family_caption}")
-rrg_figure = build_rrg_figure(
+rrg_figure = build_rrg_figure_safe(
     model,
     label_limit=label_limit,
     phases=selected_phases,
