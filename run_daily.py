@@ -29,11 +29,13 @@ def main() -> None:
     day_dir.mkdir(parents=True, exist_ok=True)
 
     sector_csv = day_dir / "rotation_data.csv"
+    family_csv = day_dir / "rotation_family.csv"
     leaders_csv = day_dir / "rotation_leaders.csv"
     html_path = day_dir / "rotation_report.html"
     png_path = day_dir / "rotation_snapshot.png"
 
     model.sector_frame.to_csv(sector_csv, index=False, encoding="utf-8-sig")
+    model.family_frame.to_csv(family_csv, index=False, encoding="utf-8-sig")
     model.leaders_frame.to_csv(leaders_csv, index=False, encoding="utf-8-sig")
     write_html_report(model, html_path)
     if not args.no_png:
@@ -43,6 +45,7 @@ def main() -> None:
     print(f"交易日: {model.as_of}")
     print(f"市场状态: {model.market_state}")
     print(f"CSV: {sector_csv}")
+    print(f"主线家族: {family_csv}")
     print(f"个股穿透: {leaders_csv}")
     print(f"HTML: {html_path}")
     if not args.no_png:

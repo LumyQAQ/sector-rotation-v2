@@ -21,6 +21,7 @@ def select_sector_view(
     sector_frame: pd.DataFrame,
     *,
     phases: list[str] | tuple[str, ...] | None = None,
+    families: list[str] | tuple[str, ...] | None = None,
     max_sectors: int | None = None,
     focus_sector: str | None = None,
 ) -> pd.DataFrame:
@@ -37,6 +38,10 @@ def select_sector_view(
     if phases is not None:
         phase_set = {phase for phase in phases if phase}
         view = base[base["阶段"].isin(phase_set)].copy() if phase_set else base.iloc[0:0].copy()
+
+    if families is not None and "主线家族" in base.columns:
+        family_set = {family for family in families if family}
+        view = view[view["主线家族"].isin(family_set)].copy() if family_set else view.iloc[0:0].copy()
 
     if max_sectors is not None:
         limit = max(0, int(max_sectors))
@@ -71,9 +76,10 @@ def _leader_lookup(model: RotationModel) -> dict[str, str]:
 def _rrg_hover_template() -> str:
     return (
         "<b>%{customdata[0]}</b><br>"
+        "主线: %{customdata[10]} | 地位: %{customdata[11]}<br>"
         "阶段: %{customdata[1]} / %{customdata[2]}<br>"
         "相对强弱: %{x:.2f} | 动量: %{y:.2f}<br>"
-        "活跃分: %{customdata[3]:.1f}<br>"
+        "活跃分: %{customdata[3]:.1f} | 家族强度: %{customdata[12]:.1f} | 共振: %{customdata[13]:.1f}<br>"
         "1日: %{customdata[4]:+.2f}% | 3日: %{customdata[5]:+.2f}% | 5日: %{customdata[6]:+.2f}%<br>"
         "上涨占比: %{customdata[7]:.0%} | 涨停数: %{customdata[8]}<br><br>"
         "%{customdata[9]}<extra></extra>"
@@ -108,10 +114,11 @@ def build_rrg_figure(
     trail_limit: int = 10,
     *,
     phases: list[str] | tuple[str, ...] | None = None,
+    families: list[str] | tuple[str, ...] | None = None,
     max_sectors: int | None = None,
     focus_sector: str | None = None,
 ) -> go.Figure:
-    df = select_sector_view(model.sector_frame, phases=phases, max_sectors=max_sectors, focus_sector=focus_sector)
+    df = select_sector_view(model.sector_frame, phases=phases, families=families, max_sectors=max_sectors, focus_sector=focus_sector)
     if df.empty:
         return _empty_rrg_figure(model)
 
@@ -167,7 +174,23 @@ def build_rrg_figure(
                     colorbar=dict(title="5日涨幅%", len=0.72),
                 ),
                 customdata=group[
-                    ["行业名称", "阶段", "方向", "活跃分", "1日涨幅", "3日涨幅", "5日涨幅", "上涨占比", "涨停数", "穿透"]
+                    [
+                        "行业名称",
+                        "阶段",
+                        "方向",
+                        "活跃分",
+                        "1日涨幅",
+                        "3日涨幅",
+                        "5日涨幅",
+                        "上涨占比",
+                        "涨停数",
+                        "穿透",
+                        "主线家族",
+                        "题材地位",
+                        "家族强度",
+                        "家族共振度",
+                        "家族内排名",
+                    ]
                 ],
                 hovertemplate=_rrg_hover_template(),
             )
@@ -194,7 +217,23 @@ def build_rrg_figure(
                     showscale=False,
                 ),
                 customdata=focus[
-                    ["行业名称", "阶段", "方向", "活跃分", "1日涨幅", "3日涨幅", "5日涨幅", "上涨占比", "涨停数", "穿透"]
+                    [
+                        "行业名称",
+                        "阶段",
+                        "方向",
+                        "活跃分",
+                        "1日涨幅",
+                        "3日涨幅",
+                        "5日涨幅",
+                        "上涨占比",
+                        "涨停数",
+                        "穿透",
+                        "主线家族",
+                        "题材地位",
+                        "家族强度",
+                        "家族共振度",
+                        "家族内排名",
+                    ]
                 ],
                 hovertemplate=_rrg_hover_template(),
             )
@@ -285,6 +324,7 @@ def write_html_report(model: RotationModel, out_path: str | Path) -> Path:
     fig_html = pio.to_html(build_rrg_figure(model), include_plotlyjs="cdn", full_html=False)
 
     df = model.sector_frame
+    family = model.family_frame
     mainline = df.nlargest(12, "活跃分")
     improving = df[df["阶段"] == "修复"].nlargest(10, "动量")
     declining = df.nsmallest(10, "5日涨幅")
@@ -332,11 +372,15 @@ def write_html_report(model: RotationModel, out_path: str | Path) -> Path:
     </section>
     <section class="cards">{summary_cards}</section>
     <section class="panel">{fig_html}</section>
+    <section class="panel">
+      <h2>主线家族强度</h2>
+      {_table_html(family, ["主线家族", "家族排名", "家族强度", "家族共振度", "子题材数", "Top3个体活跃均分", "5日涨幅均值", "涨停数"], 14)}
+    </section>
     <section class="grid">
-      <div class="panel"><h2>主线榜</h2>{_table_html(mainline, ["行业名称", "阶段", "方向", "活跃分", "5日涨幅"], 12)}</div>
-      <div class="panel"><h2>修复榜</h2>{_table_html(improving, ["行业名称", "方向", "动量", "3日涨幅", "活跃分"], 10)}</div>
-      <div class="panel"><h2>退潮榜</h2>{_table_html(declining, ["行业名称", "阶段", "5日涨幅", "1日涨幅", "活跃分"], 10)}</div>
-      <div class="panel"><h2>高位降温</h2>{_table_html(risk, ["行业名称", "相对强弱", "动量", "5日涨幅", "方向"], 10)}</div>
+      <div class="panel"><h2>主线榜</h2>{_table_html(mainline, ["主线家族", "行业名称", "题材地位", "阶段", "方向", "活跃分", "5日涨幅"], 12)}</div>
+      <div class="panel"><h2>修复榜</h2>{_table_html(improving, ["主线家族", "行业名称", "方向", "动量", "3日涨幅", "活跃分"], 10)}</div>
+      <div class="panel"><h2>退潮榜</h2>{_table_html(declining, ["主线家族", "行业名称", "阶段", "5日涨幅", "1日涨幅", "活跃分"], 10)}</div>
+      <div class="panel"><h2>高位降温</h2>{_table_html(risk, ["主线家族", "行业名称", "相对强弱", "动量", "5日涨幅", "方向"], 10)}</div>
     </section>
     <section class="panel">
       <h2>个股穿透</h2>

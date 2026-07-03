@@ -45,6 +45,46 @@ def make_toy_data():
     return pd.DataFrame(rows), stock_industry
 
 
+def make_universe_data():
+    dates = pd.date_range("2026-01-01", periods=35, freq="B")
+    stock_industry = pd.DataFrame(
+        [
+            {"代码": "600001", "名称": "主板核心", "行业名称": "AI算力"},
+            {"代码": "300001", "名称": "创业样本", "行业名称": "AI算力"},
+            {"代码": "688001", "名称": "科创样本", "行业名称": "半导体"},
+            {"代码": "600002", "名称": "*ST噪声", "行业名称": "AI算力"},
+        ]
+    )
+
+    rows = []
+    for i, date in enumerate(dates):
+        profiles = {
+            "600001": 10 + i * 0.4,
+            "300001": 8 + i * 0.6,
+            "688001": 12 + i * 0.5,
+            "600002": 3 + i * 2.5,
+        }
+        previous = {
+            "600001": 10 + max(i - 1, 0) * 0.4,
+            "300001": 8 + max(i - 1, 0) * 0.6,
+            "688001": 12 + max(i - 1, 0) * 0.5,
+            "600002": 3 + max(i - 1, 0) * 2.5,
+        }
+        for code, close in profiles.items():
+            prev = previous[code]
+            pct = 0.0 if i == 0 else (close / prev - 1) * 100
+            rows.append(
+                {
+                    "代码": code,
+                    "日期": date.strftime("%Y-%m-%d"),
+                    "收盘": close,
+                    "涨跌幅": pct,
+                    "成交额": 100_000_000 + i * 1_000_000 + int(code[-1]) * 10_000,
+                }
+            )
+    return pd.DataFrame(rows), stock_industry
+
+
 class RotationMetricTests(unittest.TestCase):
     def test_classify_phase_uses_rrg_quadrants(self):
         self.assertEqual(classify_phase(1.0, 1.0), "领涨")
@@ -55,7 +95,7 @@ class RotationMetricTests(unittest.TestCase):
     def test_build_rotation_model_returns_snapshot_trails_and_leaders(self):
         stock_daily, stock_industry = make_toy_data()
 
-        model = build_rotation_model(stock_daily, stock_industry, tail_days=12)
+        model = build_rotation_model(stock_daily, stock_industry, tail_days=12, include_growth_indices=False)
 
         self.assertEqual(model.as_of, "2026-02-18")
         self.assertIn(model.market_state, {"主线抱团", "快速轮动", "修复试探", "退潮防守"})
@@ -65,6 +105,11 @@ class RotationMetricTests(unittest.TestCase):
 
         required_sector_cols = {
             "行业名称",
+            "主线家族",
+            "题材层级",
+            "题材地位",
+            "家族强度",
+            "家族共振度",
             "相对强弱",
             "动量",
             "1日涨幅",
@@ -75,6 +120,8 @@ class RotationMetricTests(unittest.TestCase):
             "方向",
         }
         self.assertTrue(required_sector_cols.issubset(set(model.sector_frame.columns)))
+        self.assertGreaterEqual(len(model.family_frame), 1)
+        self.assertTrue({"主线家族", "家族强度", "家族共振度", "子题材数"}.issubset(set(model.family_frame.columns)))
 
         ai_row = model.sector_frame.set_index("行业名称").loc["AI算力"]
         weak_row = model.sector_frame.set_index("行业名称").loc["传统消费"]
@@ -83,6 +130,32 @@ class RotationMetricTests(unittest.TestCase):
 
         leader_types = set(model.leaders_frame["类型"])
         self.assertTrue({"1日先锋", "3日动能", "5日趋势", "核心中军"}.issubset(leader_types))
+
+    def test_model_adds_growth_board_indices_and_recommends_all_non_st_leaders(self):
+        stock_daily, stock_industry = make_universe_data()
+
+        model = build_rotation_model(stock_daily, stock_industry, tail_days=12)
+
+        sectors = set(model.sector_frame["行业名称"])
+        self.assertIn("全A等权指数", sectors)
+        self.assertIn("沪深主板指数", sectors)
+        self.assertIn("创业板指数", sectors)
+        self.assertIn("科创板指数", sectors)
+        index_rows = model.sector_frame.set_index("行业名称").loc[["全A等权指数", "沪深主板指数", "创业板指数", "科创板指数"]]
+        self.assertEqual(set(index_rows["题材层级"]), {"指数参考"})
+        self.assertEqual(set(index_rows["题材地位"]), {"指数参考"})
+        self.assertEqual(int(index_rows.loc["全A等权指数", "成分数"]), 4)
+        self.assertEqual(int(index_rows.loc["沪深主板指数", "成分数"]), 2)
+        self.assertEqual(int(index_rows.loc["创业板指数", "成分数"]), 1)
+        self.assertEqual(int(index_rows.loc["科创板指数", "成分数"]), 1)
+        self.assertEqual(model.summary["指数基准股票数"], 4)
+        self.assertGreaterEqual(model.summary["ST样本数"], 1)
+
+        recommended_codes = set(model.leaders_frame["代码"].astype(str).str.zfill(6))
+        self.assertIn("600001", recommended_codes)
+        self.assertIn("300001", recommended_codes)
+        self.assertIn("688001", recommended_codes)
+        self.assertNotIn("600002", recommended_codes)
 
 
 if __name__ == "__main__":

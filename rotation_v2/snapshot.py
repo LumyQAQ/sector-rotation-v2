@@ -51,11 +51,12 @@ def _board_lines(title: str, df: pd.DataFrame, value_col: str, n: int = 8) -> li
         value = row[value_col]
         name = row["行业名称"]
         phase = row.get("阶段", "")
+        status = row.get("题材地位", "")
         if isinstance(value, (int, float, np.floating)):
             value_text = _format_pct(float(value)) if "涨幅" in value_col or value_col in {"动量", "相对强弱"} else f"{value:.1f}"
         else:
             value_text = str(value)
-        lines.append(f"{i:02d}. {name}  {value_text}  {phase}")
+        lines.append(f"{i:02d}. {name}  {value_text}  {phase}  {status}")
     return lines
 
 
@@ -86,7 +87,7 @@ def render_snapshot_png(model: RotationModel, out_path: str | Path, label_limit:
     title_ax = fig.add_subplot(grid[0:1, :])
     title_ax.set_axis_off()
     title_ax.text(0, 0.72, f"{model.as_of} 板块轮动日报", fontsize=29, fontweight="bold", color="#111827")
-    title_ax.text(0, 0.22, "RRG 强弱动量 + 主线榜 + 个股穿透", fontsize=13, color="#6b7280")
+    title_ax.text(0, 0.22, "RRG 强弱动量 + 主线家族 + 个股穿透", fontsize=13, color="#6b7280")
     title_ax.text(0.83, 0.62, model.market_state, fontsize=18, fontweight="bold", color="white",
                   bbox=dict(boxstyle="round,pad=0.42,rounding_size=0.08", fc="#111827", ec="#111827"))
 
