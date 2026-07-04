@@ -39,6 +39,51 @@ def normalize_stock_name(value: Any) -> str:
     return str(value or "").replace("\u3000", "").strip().replace(" ", "")
 
 
+TRADE_NAME_PREFIXES = ("XD", "DR", "XR")
+
+
+def strip_trade_name_prefix(value: Any) -> str:
+    name = normalize_stock_name(value)
+    for prefix in TRADE_NAME_PREFIXES:
+        if name.startswith(prefix) and len(name) > len(prefix) + 1:
+            return name[len(prefix) :]
+    return name
+
+
+def _has_trade_name_prefix(value: Any) -> bool:
+    name = normalize_stock_name(value)
+    return any(name.startswith(prefix) and len(name) > len(prefix) + 1 for prefix in TRADE_NAME_PREFIXES)
+
+
+def _trade_alias_matches(concepts: pd.DataFrame, industry: pd.DataFrame, exact_row_ids: set[int]) -> pd.DataFrame:
+    unmatched = concepts[~concepts["_concept_row"].isin(exact_row_ids)].copy()
+    if unmatched.empty:
+        return pd.DataFrame()
+
+    prefixed = industry[industry["名称"].map(_has_trade_name_prefix)].copy()
+    if prefixed.empty:
+        return pd.DataFrame()
+    prefixed["stock_name_alias"] = prefixed["名称"].map(strip_trade_name_prefix)
+    prefixed = prefixed[prefixed["stock_name_alias"].str.len() >= 3]
+
+    records: list[dict[str, Any]] = []
+    for _, concept in unmatched.iterrows():
+        key = normalize_stock_name(concept["stock_name"])
+        if len(key) < 3:
+            continue
+        candidates = prefixed[
+            prefixed["stock_name_alias"].map(lambda alias: key.startswith(alias) or alias.startswith(key))
+        ]
+        if candidates["代码"].nunique() != 1:
+            continue
+        for _, candidate in candidates.iterrows():
+            record = concept.to_dict()
+            record.update({"代码": candidate["代码"], "名称": candidate["名称"], "stock_name_norm": candidate["stock_name_norm"]})
+            records.append(record)
+
+    return pd.DataFrame(records)
+
+
 def _read_csv(path: Path) -> pd.DataFrame:
     for encoding in ("utf-8-sig", "utf-8", "gbk", "gb18030"):
         try:
@@ -76,13 +121,16 @@ def build_kpl_concept_mapping(
     industry["代码"] = clean_stock_code(industry["代码"])
     industry["名称"] = industry["名称"].astype(str)
     industry["stock_name_norm"] = industry["名称"].map(normalize_stock_name)
+    concepts = concepts.reset_index(drop=True).reset_index(names="_concept_row")
+    concepts["stock_name_norm"] = concepts["stock_name"].map(normalize_stock_name)
 
-    matched = concepts.merge(
+    exact_matched = concepts.merge(
         industry[["代码", "名称", "stock_name_norm"]],
-        left_on="stock_name",
-        right_on="stock_name_norm",
+        on="stock_name_norm",
         how="inner",
     )
+    alias_matched = _trade_alias_matches(concepts, industry, set(exact_matched["_concept_row"].astype(int)))
+    matched = pd.concat([exact_matched, alias_matched], ignore_index=True)
     mapping = (
         matched.rename(columns={"concept_name": "行业名称"})[["代码", "名称", "行业名称"]]
         .drop_duplicates(["代码", "行业名称"])
