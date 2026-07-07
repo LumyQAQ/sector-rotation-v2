@@ -149,6 +149,13 @@ def build_rrg_figure_safe(model, *, label_limit, phases, families, max_sectors, 
     )
 
 
+def plotly_chart_stretch(figure):
+    if "width" in inspect.signature(st.plotly_chart).parameters:
+        st.plotly_chart(figure, width="stretch")
+    else:
+        st.plotly_chart(figure, use_container_width=True)
+
+
 with st.sidebar:
     st.header("口径")
     if view_mode == "开盘啦概念轮动":
@@ -203,7 +210,7 @@ rrg_figure = build_rrg_figure_safe(
     focus_sector=focus_sector,
 )
 rrg_figure.update_layout(title=f"{model.as_of} {object_label}轮动地图 | {model.market_state}")
-st.plotly_chart(rrg_figure, width="stretch")
+plotly_chart_stretch(rrg_figure)
 
 if focus_sector:
     focus_row = model.sector_frame.set_index("行业名称").loc[focus_sector]
@@ -225,7 +232,7 @@ if focus_sector:
 
     focus_chart_col, focus_table_col = st.columns([1.35, 1])
     with focus_chart_col:
-        st.plotly_chart(build_sector_focus_figure(model, focus_sector), width="stretch")
+        plotly_chart_stretch(build_sector_focus_figure(model, focus_sector))
     with focus_table_col:
         focus_leaders = model.leaders_frame[model.leaders_frame["行业名称"] == focus_sector]
         st.dataframe(display_columns(focus_leaders, ["行业名称", "类型", "排名", "股票名称", "代码", "展示"]), use_container_width=True, height=360)
