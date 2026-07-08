@@ -40,6 +40,7 @@ def normalize_stock_name(value: Any) -> str:
 
 
 TRADE_NAME_PREFIXES = ("XD", "DR", "XR")
+DISPLAY_NAME_SUFFIXES = ("-U", "-W", "-V", "-B")
 
 
 def strip_trade_name_prefix(value: Any) -> str:
@@ -50,35 +51,69 @@ def strip_trade_name_prefix(value: Any) -> str:
     return name
 
 
-def _has_trade_name_prefix(value: Any) -> bool:
+def strip_display_name_suffix(value: Any) -> str:
     name = normalize_stock_name(value)
-    return any(name.startswith(prefix) and len(name) > len(prefix) + 1 for prefix in TRADE_NAME_PREFIXES)
+    for suffix in DISPLAY_NAME_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix) + 1:
+            return name[: -len(suffix)]
+    return name
 
 
-def _trade_alias_matches(concepts: pd.DataFrame, industry: pd.DataFrame, exact_row_ids: set[int]) -> pd.DataFrame:
+def _stock_name_aliases(value: Any) -> list[str]:
+    name = normalize_stock_name(value)
+    candidates = [strip_trade_name_prefix(name), strip_display_name_suffix(name)]
+    candidates.append(strip_display_name_suffix(candidates[0]))
+
+    aliases: list[str] = []
+    for alias in candidates:
+        if alias != name and len(alias) >= 3 and alias not in aliases:
+            aliases.append(alias)
+    return aliases
+
+
+def _industry_alias_frame(industry: pd.DataFrame) -> pd.DataFrame:
+    records: list[dict[str, Any]] = []
+    for _, row in industry.iterrows():
+        for alias in _stock_name_aliases(row["名称"]):
+            records.append(
+                {
+                    "代码": row["代码"],
+                    "名称": row["名称"],
+                    "stock_name_norm": row["stock_name_norm"],
+                    "stock_name_alias": alias,
+                }
+            )
+    return pd.DataFrame(records)
+
+
+def _stock_alias_matches(concepts: pd.DataFrame, industry: pd.DataFrame, exact_row_ids: set[int]) -> pd.DataFrame:
     unmatched = concepts[~concepts["_concept_row"].isin(exact_row_ids)].copy()
     if unmatched.empty:
         return pd.DataFrame()
 
-    prefixed = industry[industry["名称"].map(_has_trade_name_prefix)].copy()
-    if prefixed.empty:
+    alias_frame = _industry_alias_frame(industry)
+    if alias_frame.empty:
         return pd.DataFrame()
-    prefixed["stock_name_alias"] = prefixed["名称"].map(strip_trade_name_prefix)
-    prefixed = prefixed[prefixed["stock_name_alias"].str.len() >= 3]
 
     records: list[dict[str, Any]] = []
     for _, concept in unmatched.iterrows():
         key = normalize_stock_name(concept["stock_name"])
         if len(key) < 3:
             continue
-        candidates = prefixed[
-            prefixed["stock_name_alias"].map(lambda alias: key.startswith(alias) or alias.startswith(key))
+        candidates = alias_frame[
+            alias_frame["stock_name_alias"].map(lambda alias: key.startswith(alias) or alias.startswith(key))
         ]
         if candidates["代码"].nunique() != 1:
             continue
         for _, candidate in candidates.iterrows():
             record = concept.to_dict()
-            record.update({"代码": candidate["代码"], "名称": candidate["名称"], "stock_name_norm": candidate["stock_name_norm"]})
+            record.update(
+                {
+                    "代码": candidate["代码"],
+                    "名称": candidate["名称"],
+                    "stock_name_norm": candidate["stock_name_norm"],
+                }
+            )
             records.append(record)
 
     return pd.DataFrame(records)
@@ -129,7 +164,7 @@ def build_kpl_concept_mapping(
         on="stock_name_norm",
         how="inner",
     )
-    alias_matched = _trade_alias_matches(concepts, industry, set(exact_matched["_concept_row"].astype(int)))
+    alias_matched = _stock_alias_matches(concepts, industry, set(exact_matched["_concept_row"].astype(int)))
     matched = pd.concat([exact_matched, alias_matched], ignore_index=True)
     mapping = (
         matched.rename(columns={"concept_name": "行业名称"})[["代码", "名称", "行业名称"]]

@@ -54,6 +54,25 @@ class KplConceptTests(unittest.TestCase):
         self.assertIn("600580", set(mapping["代码"].astype(str).str.zfill(6)))
         self.assertEqual(stats["概念匹配股票数"], 1)
 
+    def test_build_kpl_concept_mapping_matches_unique_suffix_name_alias(self):
+        _stock_daily, stock_industry = make_universe_data()
+        stock_industry = pd.concat(
+            [
+                stock_industry,
+                pd.DataFrame([{"代码": "688343", "名称": "云天励飞-U", "行业名称": "IT服务Ⅱ"}]),
+            ],
+            ignore_index=True,
+        )
+        rows = [{"concept_order": 1, "concept_name": "超节点概念", "stock_seq": 1, "stock_name": "云天励飞"}]
+        temp = tempfile.NamedTemporaryFile("w", suffix=".csv", encoding="utf-8-sig", delete=False)
+        pd.DataFrame(rows).to_csv(temp.name, index=False)
+        temp.close()
+
+        mapping, stats = build_kpl_concept_mapping(stock_industry, Path(temp.name))
+
+        self.assertIn("688343", set(mapping["代码"].astype(str).str.zfill(6)))
+        self.assertEqual(stats["概念匹配股票数"], 1)
+
     def test_build_kpl_concept_model_uses_concepts_without_growth_indices(self):
         stock_daily, stock_industry = make_universe_data()
         concept_csv = self._write_concept_csv()
