@@ -1,7 +1,7 @@
 {
-  "date": "2026-07-10",
+  "date": "2026-07-13",
   "stock_rows": 5529,
-  "total_rows": 209708,
+  "total_rows": 212047,
   "database_file": "sample_data.db",
   "database_size": 29388800,
   "streamlit_app_url": "https://cmlm-sector-rotation-v2.streamlit.app",
@@ -12,5 +12,5 @@
     "st_in_rotation_metrics": true,
     "st_excluded_from_leaders": true
   },
-  "generated_at": "2026-07-10T20:56:01"
+  "generated_at": "2026-07-13T15:24:39"
 }
