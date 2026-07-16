@@ -7,3 +7,4 @@ __pycache__/
 .venv/
 outputs_verify/
 outputs_deploy_check/
+sample_data.db.bak_*
